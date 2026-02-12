@@ -1,0 +1,292 @@
+from flask import Flask, render_template, Response, jsonify, request
+import cv2
+import mediapipe as mp
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+import os
+from collections import deque
+import json
+
+app = Flask(__name__)
+
+class SignLanguageTranslator:
+    def __init__(self, model_path, labels_path):
+        """Initialize the translator"""
+        # Load model
+        self.model = keras.models.load_model(model_path)
+        self.labels = np.load(labels_path)
+        
+        # Initialize MediaPipe
+        self.mp_hands = mp.solutions.hands
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.hands = self.mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=1,
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.7
+        )
+        
+        # Prediction smoothing
+        self.prediction_buffer = deque(maxlen=10)
+        self.confidence_threshold = 0.70
+        
+        # Gesture stability
+        self.last_gesture = None
+        self.gesture_stable_count = 0
+        self.stability_threshold = 15
+        
+        # Sentence
+        self.sentence = []
+    
+    def extract_landmarks(self, hand_landmarks):
+        """Extract hand landmarks"""
+        landmarks = []
+        for landmark in hand_landmarks.landmark:
+            landmarks.extend([landmark.x, landmark.y, landmark.z])
+        return np.array(landmarks).reshape(1, -1)
+    
+    def predict_gesture(self, landmarks):
+        """Predict gesture from landmarks"""
+        prediction = self.model.predict(landmarks, verbose=0)[0]
+        predicted_class = np.argmax(prediction)
+        confidence = prediction[predicted_class]
+        
+        if confidence > self.confidence_threshold:
+            self.prediction_buffer.append((predicted_class, confidence))
+        
+        if len(self.prediction_buffer) > 0:
+            classes = [pred[0] for pred in self.prediction_buffer]
+            most_common = max(set(classes), key=classes.count)
+            avg_confidence = np.mean([pred[1] for pred in self.prediction_buffer 
+                                     if pred[0] == most_common])
+            
+            # Get all predictions for display
+            all_preds = []
+            for i, label in enumerate(self.labels):
+                all_preds.append({
+                    'label': label,
+                    'confidence': float(prediction[i])
+                })
+            
+            return self.labels[most_common], float(avg_confidence), all_preds
+        
+        return None, 0.0, []
+    
+    def check_gesture_stability(self, gesture):
+        """Check if gesture is stable enough to add to sentence"""
+        if gesture == self.last_gesture:
+            self.gesture_stable_count += 1
+        else:
+            self.gesture_stable_count = 0
+            self.last_gesture = gesture
+        
+        if self.gesture_stable_count == self.stability_threshold:
+            self.gesture_stable_count = 0
+            return True
+        return False
+    
+    def reset_buffer(self):
+        """Reset prediction buffer"""
+        self.gesture_stable_count = 0
+        self.last_gesture = None
+        self.prediction_buffer.clear()
+    
+    def process_frame(self, frame):
+        """Process a single frame and return results"""
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.hands.process(rgb_frame)
+        
+        gesture = None
+        confidence = 0.0
+        all_predictions = []
+        hand_detected = False
+        
+        if results.multi_hand_landmarks:
+            hand_detected = True
+            for hand_landmarks in results.multi_hand_landmarks:
+                # Draw landmarks
+                self.mp_drawing.draw_landmarks(
+                    frame,
+                    hand_landmarks,
+                    self.mp_hands.HAND_CONNECTIONS,
+                    self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=3),
+                    self.mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2)
+                )
+                
+                # Predict
+                landmarks = self.extract_landmarks(hand_landmarks)
+                gesture, confidence, all_predictions = self.predict_gesture(landmarks)
+                
+                # Check for auto-add
+                if gesture and self.check_gesture_stability(gesture):
+                    self.sentence.append(gesture)
+        else:
+            self.reset_buffer()
+        
+        return frame, gesture, confidence, all_predictions, hand_detected
+
+# Load model
+def load_model():
+    """Load the trained model"""
+    model_dir = "models"
+    
+    if not os.path.exists(model_dir):
+        return None
+    
+    model_files = [f for f in os.listdir(model_dir) if f.endswith('.h5')]
+    
+    if not model_files:
+        return None
+    
+    # Use the most recent model
+    model_files.sort(reverse=True)
+    model_file = os.path.join(model_dir, model_files[0])
+    labels_file = model_file.replace('.h5', '_labels.npy')
+    
+    if not os.path.exists(labels_file):
+        return None
+    
+    try:
+        translator = SignLanguageTranslator(model_file, labels_file)
+        return translator
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        return None
+
+# Initialize translator
+translator = load_model()
+camera = None
+camera_active = False
+
+@app.route('/')
+def index():
+    """Render the main page"""
+    if translator is None:
+        return "Model not found! Please train a model first.", 500
+    return render_template('index.html', gestures=translator.labels.tolist())
+
+def generate_frames():
+    """Generate frames for video streaming"""
+    global camera, camera_active
+    
+    while camera_active:
+        if camera is None:
+            break
+            
+        success, frame = camera.read()
+        if not success:
+            break
+        
+        frame = cv2.flip(frame, 1)
+        
+        # Process frame
+        processed_frame, gesture, confidence, all_preds, hand_detected = \
+            translator.process_frame(frame)
+        
+        # Encode frame
+        ret, buffer = cv2.imencode('.jpg', processed_frame)
+        frame = buffer.tobytes()
+        
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+
+@app.route('/video_feed')
+def video_feed():
+    """Video streaming route"""
+    return Response(generate_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/start_camera', methods=['POST'])
+def start_camera():
+    """Start the camera"""
+    global camera, camera_active
+    
+    if not camera_active:
+        camera = cv2.VideoCapture(0)
+        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        camera_active = True
+        return jsonify({'status': 'success', 'message': 'Camera started'})
+    
+    return jsonify({'status': 'error', 'message': 'Camera already active'})
+
+@app.route('/stop_camera', methods=['POST'])
+def stop_camera():
+    """Stop the camera"""
+    global camera, camera_active
+    
+    if camera_active:
+        camera_active = False
+        if camera is not None:
+            camera.release()
+            camera = None
+        return jsonify({'status': 'success', 'message': 'Camera stopped'})
+    
+    return jsonify({'status': 'error', 'message': 'Camera not active'})
+
+@app.route('/get_prediction', methods=['GET'])
+def get_prediction():
+    """Get current prediction"""
+    global camera, camera_active
+    
+    if not camera_active or camera is None:
+        return jsonify({
+            'gesture': None,
+            'confidence': 0,
+            'all_predictions': [],
+            'hand_detected': False,
+            'sentence': translator.sentence
+        })
+    
+    success, frame = camera.read()
+    if not success:
+        return jsonify({
+            'gesture': None,
+            'confidence': 0,
+            'all_predictions': [],
+            'hand_detected': False,
+            'sentence': translator.sentence
+        })
+    
+    frame = cv2.flip(frame, 1)
+    _, gesture, confidence, all_preds, hand_detected = translator.process_frame(frame)
+    
+    return jsonify({
+        'gesture': gesture,
+        'confidence': confidence,
+        'all_predictions': all_preds,
+        'hand_detected': hand_detected,
+        'sentence': translator.sentence
+    })
+
+@app.route('/add_to_sentence', methods=['POST'])
+def add_to_sentence():
+    """Manually add current gesture to sentence"""
+    data = request.json
+    gesture = data.get('gesture')
+    
+    if gesture:
+        translator.sentence.append(gesture)
+        return jsonify({'status': 'success', 'sentence': translator.sentence})
+    
+    return jsonify({'status': 'error', 'message': 'No gesture provided'})
+
+@app.route('/clear_sentence', methods=['POST'])
+def clear_sentence():
+    """Clear the sentence"""
+    translator.sentence.clear()
+    return jsonify({'status': 'success', 'sentence': []})
+
+@app.route('/get_sentence', methods=['GET'])
+def get_sentence():
+    """Get current sentence"""
+    return jsonify({'sentence': translator.sentence})
+
+@app.route('/get_gestures', methods=['GET'])
+def get_gestures():
+    """Get all available gestures"""
+    return jsonify({'gestures': translator.labels.tolist()})
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)

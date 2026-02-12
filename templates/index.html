@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🤟 Sign Language Translator</title>
+    
+    <!-- Font Awesome for large icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <h1 class="logo">
+                <i class="fas fa-hands"></i>
+                Sign Language Translator
+            </h1>
+            <p class="subtitle">Real-time translation with AI</p>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="container">
+            <div class="grid">
+                <!-- Left Column - Video Feed -->
+                <div class="video-section">
+                    <div class="card video-card">
+                        <div class="card-header">
+                            <h2><i class="fas fa-video"></i> Live Camera</h2>
+                            <div class="status-indicator" id="cameraStatus">
+                                <span class="status-dot"></span>
+                                <span class="status-text">Camera Off</span>
+                            </div>
+                        </div>
+                        
+                        <div class="video-container" id="videoContainer">
+                            <img id="videoFeed" src="" alt="Video Feed" style="display: none;">
+                            <div class="video-placeholder" id="videoPlaceholder">
+                                <i class="fas fa-camera-slash"></i>
+                                <p>Click "Start Camera" to begin</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Control Buttons -->
+                        <div class="controls">
+                            <button class="btn btn-primary btn-large" id="startBtn" onclick="startCamera()">
+                                <i class="fas fa-play-circle"></i>
+                                <span>Start Camera</span>
+                            </button>
+                            <button class="btn btn-danger btn-large" id="stopBtn" onclick="stopCamera()" style="display: none;">
+                                <i class="fas fa-stop-circle"></i>
+                                <span>Stop Camera</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column - Recognition & Sentence -->
+                <div class="info-section">
+                    <!-- Current Gesture -->
+                    <div class="card gesture-card">
+                        <div class="card-header">
+                            <h2><i class="fas fa-hand-paper"></i> Current Gesture</h2>
+                        </div>
+                        <div class="gesture-display" id="gestureDisplay">
+                            <div class="gesture-icon">👋</div>
+                            <div class="gesture-name" id="gestureName">No hand detected</div>
+                            <div class="confidence-container">
+                                <div class="confidence-label">Confidence</div>
+                                <div class="confidence-bar">
+                                    <div class="confidence-fill" id="confidenceFill" style="width: 0%"></div>
+                                    <div class="confidence-text" id="confidenceText">0%</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sentence Builder -->
+                    <div class="card sentence-card">
+                        <div class="card-header">
+                            <h2><i class="fas fa-comment-dots"></i> Sentence</h2>
+                            <div class="word-count" id="wordCount">0 words</div>
+                        </div>
+                        <div class="sentence-display" id="sentenceDisplay">
+                            <p class="sentence-text" id="sentenceText">Your sentence will appear here...</p>
+                        </div>
+                        
+                        <!-- Sentence Controls -->
+                        <div class="sentence-controls">
+                            <button class="btn btn-success btn-large" onclick="addToSentence()">
+                                <i class="fas fa-plus-circle"></i>
+                                <span>Add Current</span>
+                            </button>
+                            <button class="btn btn-warning btn-large" onclick="speakSentence()">
+                                <i class="fas fa-volume-up"></i>
+                                <span>Speak</span>
+                            </button>
+                            <button class="btn btn-secondary btn-large" onclick="clearSentence()">
+                                <i class="fas fa-trash-alt"></i>
+                                <span>Clear</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- All Predictions -->
+                    <div class="card predictions-card">
+                        <div class="card-header">
+                            <h2><i class="fas fa-chart-bar"></i> All Predictions</h2>
+                        </div>
+                        <div class="predictions-list" id="predictionsList">
+                            <p class="no-predictions">Start camera to see predictions</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Available Gestures -->
+            <div class="gestures-section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2><i class="fas fa-list"></i> Available Gestures</h2>
+                    </div>
+                    <div class="gestures-grid" id="gesturesGrid">
+                        {% for gesture in gestures %}
+                        <div class="gesture-badge">{{ gesture }}</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; | 2026 Sign Language Translator |</p>
+        </div>
+    </footer>
+
+    <!-- Custom JavaScript -->
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>

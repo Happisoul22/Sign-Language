@@ -1,0 +1,14 @@
+{
+    "model_name": "sign_language_model_20260211_005314",
+    "timestamp": "20260211_005314",
+    "num_classes": 6,
+    "gestures": [
+        "HELP",
+        "Hello",
+        "I LOVE YOU",
+        "OK",
+        "PEACE",
+        "s"
+    ],
+    "input_shape": 63
+}
