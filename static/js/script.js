@@ -2,6 +2,9 @@
 let cameraActive = false;
 let updateInterval = null;
 let currentGesture = null;
+let lastDetectedGesture = null;
+let highConfidenceDetected = false;
+let isPaused = false;
 
 // Text-to-Speech
 const synth = window.speechSynthesis;
@@ -15,6 +18,8 @@ document.addEventListener('DOMContentLoaded', function() {
 // Start Camera
 async function startCamera() {
     try {
+        console.log('🎥 Starting camera...');
+        
         const response = await fetch('/start_camera', {
             method: 'POST',
             headers: {
@@ -26,6 +31,8 @@ async function startCamera() {
         
         if (data.status === 'success') {
             cameraActive = true;
+            isPaused = false;
+            highConfidenceDetected = false; // Reset detection flag
             updateCameraStatus(true);
             
             // Show video feed
@@ -33,12 +40,19 @@ async function startCamera() {
             document.getElementById('videoFeed').style.display = 'block';
             document.getElementById('videoFeed').src = '/video_feed?' + new Date().getTime();
             
-            // Switch buttons
+            // Switch buttons - Show Pause and Stop
             document.getElementById('startBtn').style.display = 'none';
+            document.getElementById('pauseBtn').style.display = 'flex';
             document.getElementById('stopBtn').style.display = 'flex';
+            document.getElementById('continueBtn').style.display = 'none';
             
             // Start updating predictions
             startPredictionUpdates();
+            
+            console.log('✅ Camera started successfully!');
+            console.log('📊 Auto-pause enabled:', document.getElementById('autoStopCamera').checked);
+            console.log('🔊 Auto-speak enabled:', document.getElementById('autoSpeak').checked);
+            console.log('🌐 Language:', document.getElementById('languageSelect').value);
             
             showNotification('Camera started successfully!', 'success');
         }
@@ -62,6 +76,8 @@ async function stopCamera() {
         
         if (data.status === 'success') {
             cameraActive = false;
+            isPaused = false;
+            highConfidenceDetected = false; // Reset flag
             updateCameraStatus(false);
             
             // Hide video feed
@@ -70,6 +86,8 @@ async function stopCamera() {
             
             // Switch buttons
             document.getElementById('stopBtn').style.display = 'none';
+            document.getElementById('pauseBtn').style.display = 'none';
+            document.getElementById('continueBtn').style.display = 'none';
             document.getElementById('startBtn').style.display = 'flex';
             
             // Stop updating predictions
@@ -78,12 +96,61 @@ async function stopCamera() {
             // Reset displays
             resetDisplays();
             
+            console.log('✅ Camera stopped');
             showNotification('Camera stopped', 'info');
         }
     } catch (error) {
         console.error('Error stopping camera:', error);
         showNotification('Failed to stop camera', 'error');
     }
+}
+
+// Pause Camera (camera keeps running, just pause predictions)
+function pauseCamera() {
+    if (!cameraActive || isPaused) {
+        return;
+    }
+    
+    isPaused = true;
+    console.log('⏸️  Camera paused (running in background)');
+    
+    // Update buttons
+    document.getElementById('pauseBtn').style.display = 'none';
+    document.getElementById('continueBtn').style.display = 'flex';
+    
+    // Change status indicator
+    const statusIndicator = document.getElementById('cameraStatus');
+    const statusText = statusIndicator.querySelector('.status-text');
+    statusText.textContent = 'Camera Paused';
+    statusIndicator.classList.add('paused');
+    
+    showNotification('Camera paused - Click Continue to resume', 'info');
+}
+
+// Continue Camera (resume predictions)
+function continueCamera() {
+    if (!cameraActive || !isPaused) {
+        return;
+    }
+    
+    isPaused = false;
+    highConfidenceDetected = false; // Reset for next detection
+    console.log('▶️  Camera resumed');
+    
+    // Update buttons
+    document.getElementById('continueBtn').style.display = 'none';
+    document.getElementById('pauseBtn').style.display = 'flex';
+    
+    // Change status indicator
+    const statusIndicator = document.getElementById('cameraStatus');
+    const statusText = statusIndicator.querySelector('.status-text');
+    statusText.textContent = 'Camera Active';
+    statusIndicator.classList.remove('paused');
+    
+    // Hide translation if shown
+    document.getElementById('translationDisplay').style.display = 'none';
+    
+    showNotification('Camera resumed - Ready to detect!', 'success');
 }
 
 // Update camera status indicator
@@ -115,6 +182,11 @@ function stopPredictionUpdates() {
 
 // Update predictions from server
 async function updatePredictions() {
+    // Skip if paused
+    if (isPaused) {
+        return;
+    }
+    
     try {
         const response = await fetch('/get_prediction');
         const data = await response.json();
@@ -124,6 +196,40 @@ async function updatePredictions() {
             currentGesture = data.gesture;
             updateGestureDisplay(data.gesture, data.confidence);
             updatePredictionsList(data.all_predictions);
+            
+            // Auto-pause camera if confidence > 70%
+            const autoStop = document.getElementById('autoStopCamera').checked;
+            const confidencePercent = (data.confidence * 100).toFixed(1);
+            
+            console.log(`Detected: ${data.gesture} - Confidence: ${confidencePercent}%`);
+            
+            if (autoStop && data.confidence > 0.70 && !highConfidenceDetected && cameraActive) {
+                highConfidenceDetected = true;
+                
+                console.log(`🎯 HIGH CONFIDENCE DETECTED: ${data.gesture} (${confidencePercent}%)`);
+                console.log(`⏸️  Pausing camera...`);
+                
+                // Pause (camera keeps running in background!)
+                setTimeout(() => {
+                    pauseCamera();
+                    
+                    // Auto-speak if enabled
+                    const autoSpeak = document.getElementById('autoSpeak').checked;
+                    if (autoSpeak) {
+                        console.log(`🔊 Auto-speaking: ${data.gesture}`);
+                        speakText(data.gesture);
+                    }
+                    
+                    // Translate if language is not English
+                    const selectedLang = document.getElementById('languageSelect').value;
+                    if (selectedLang !== 'en') {
+                        console.log(`🌐 Translating to ${selectedLang}...`);
+                        translateAndDisplay(data.gesture, selectedLang);
+                    }
+                    
+                    showNotification(`Detected: ${data.gesture} (${confidencePercent}%) - Click Continue`, 'success');
+                }, 300);
+            }
         } else {
             currentGesture = null;
             updateGestureDisplay(null, 0);
@@ -281,32 +387,21 @@ async function speakSentence() {
         }
         
         const text = data.sentence.join(' ');
+        const selectedLang = document.getElementById('languageSelect').value;
         
-        // Cancel any ongoing speech
-        synth.cancel();
-        
-        // Create utterance
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = 0.9;
-        utterance.pitch = 1.0;
-        utterance.volume = 1.0;
-        
-        // Event handlers
-        utterance.onstart = function() {
+        // If not English, translate first then speak
+        if (selectedLang !== 'en') {
+            const translatedText = await translateText(text, selectedLang);
+            if (translatedText) {
+                speakText(translatedText, selectedLang);
+                showNotification(`🔊 Speaking in ${getLanguageName(selectedLang)}`, 'info');
+            } else {
+                speakText(text); // Fallback to English
+            }
+        } else {
+            speakText(text);
             showNotification('🔊 Speaking: ' + text, 'info');
-        };
-        
-        utterance.onend = function() {
-            console.log('Speech finished');
-        };
-        
-        utterance.onerror = function(event) {
-            console.error('Speech error:', event);
-            showNotification('Speech error occurred', 'error');
-        };
-        
-        // Speak
-        synth.speak(utterance);
+        }
         
     } catch (error) {
         console.error('Error speaking sentence:', error);
@@ -314,10 +409,115 @@ async function speakSentence() {
     }
 }
 
+// Speak text with language support
+function speakText(text, lang = 'en') {
+    // Cancel any ongoing speech
+    synth.cancel();
+    
+    // Create utterance
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.9;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+    utterance.lang = getVoiceLang(lang);
+    
+    // Speak
+    synth.speak(utterance);
+}
+
+// Translate text to target language
+async function translateText(text, targetLang) {
+    try {
+        const response = await fetch('/translate_text', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                text: text,
+                target_lang: targetLang
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+            return data.translated;
+        } else {
+            console.error('Translation failed:', data.message);
+            return null;
+        }
+    } catch (error) {
+        console.error('Error translating:', error);
+        return null;
+    }
+}
+
+// Translate and display
+async function translateAndDisplay(text, targetLang) {
+    const translated = await translateText(text, targetLang);
+    
+    if (translated) {
+        const translationDisplay = document.getElementById('translationDisplay');
+        const translationText = document.getElementById('translationText');
+        
+        translationText.textContent = translated;
+        translationDisplay.style.display = 'block';
+        
+        showNotification(`Translated to ${getLanguageName(targetLang)}`, 'success');
+    }
+}
+
+// Get language name from code
+function getLanguageName(code) {
+    const languages = {
+        'en': 'English',
+        'hi': 'Hindi',
+        'es': 'Spanish',
+        'fr': 'French',
+        'de': 'German',
+        'it': 'Italian',
+        'pt': 'Portuguese',
+        'ru': 'Russian',
+        'ja': 'Japanese',
+        'ko': 'Korean',
+        'zh-cn': 'Chinese',
+        'ar': 'Arabic',
+        'ta': 'Tamil',
+        'te': 'Telugu',
+        'kn': 'Kannada'
+    };
+    return languages[code] || code;
+}
+
+// Get voice language code for speech synthesis
+function getVoiceLang(code) {
+    const voiceCodes = {
+        'en': 'en-US',
+        'hi': 'hi-IN',
+        'es': 'es-ES',
+        'fr': 'fr-FR',
+        'de': 'de-DE',
+        'it': 'it-IT',
+        'pt': 'pt-PT',
+        'ru': 'ru-RU',
+        'ja': 'ja-JP',
+        'ko': 'ko-KR',
+        'zh-cn': 'zh-CN',
+        'ar': 'ar-SA',
+        'ta': 'ta-IN',
+        'te': 'te-IN',
+        'kn': 'kn-IN'
+    };
+    return voiceCodes[code] || 'en-US';
+}
+
 // Reset displays
 function resetDisplays() {
     updateGestureDisplay(null, 0);
     document.getElementById('predictionsList').innerHTML = '<p class="no-predictions">Start camera to see predictions</p>';
+    document.getElementById('translationDisplay').style.display = 'none';
+    highConfidenceDetected = false;
 }
 
 // Show notification (simple toast)

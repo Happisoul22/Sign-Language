@@ -55,6 +55,14 @@
                                 <i class="fas fa-play-circle"></i>
                                 <span>Start Camera</span>
                             </button>
+                            <button class="btn btn-warning btn-large" id="pauseBtn" onclick="pauseCamera()" style="display: none;">
+                                <i class="fas fa-pause-circle"></i>
+                                <span>Pause</span>
+                            </button>
+                            <button class="btn btn-success btn-large" id="continueBtn" onclick="continueCamera()" style="display: none;">
+                                <i class="fas fa-play-circle"></i>
+                                <span>Continue</span>
+                            </button>
                             <button class="btn btn-danger btn-large" id="stopBtn" onclick="stopCamera()" style="display: none;">
                                 <i class="fas fa-stop-circle"></i>
                                 <span>Stop Camera</span>
@@ -108,6 +116,50 @@
                                 <span>Clear</span>
                             </button>
                         </div>
+                        
+                        <!-- Language Selection -->
+                        <div class="language-selector">
+                            <label for="languageSelect"><i class="fas fa-language"></i> Translate to:</label>
+                            <select id="languageSelect" class="language-dropdown">
+                                <option value="en">English</option>
+                                <option value="hi">Hindi (हिंदी)</option>
+                                <option value="es">Spanish (Español)</option>
+                                <option value="fr">French (Français)</option>
+                                <option value="de">German (Deutsch)</option>
+                                <option value="it">Italian (Italiano)</option>
+                                <option value="pt">Portuguese (Português)</option>
+                                <option value="ru">Russian (Русский)</option>
+                                <option value="ja">Japanese (日本語)</option>
+                                <option value="ko">Korean (한국어)</option>
+                                <option value="zh-cn">Chinese (中文)</option>
+                                <option value="ar">Arabic (العربية)</option>
+                                <option value="ta">Tamil (தமிழ்)</option>
+                                <option value="te">Telugu (తెలుగు)</option>
+                                <option value="kn">Kannada (ಕನ್ನಡ)</option>
+                            </select>
+                        </div>
+                        
+                        <!-- Translation Display -->
+                        <div class="translation-display" id="translationDisplay" style="display: none;">
+                            <div class="translation-label">Translation:</div>
+                            <div class="translation-text" id="translationText"></div>
+                        </div>
+                        
+                        <!-- Auto Features Settings -->
+                        <div class="auto-settings">
+                            <div class="setting-item">
+                                <input type="checkbox" id="autoStopCamera" checked>
+                                <label for="autoStopCamera">
+                                    <i class="fas fa-stop-circle"></i> Auto-stop camera on detection (>70%)
+                                </label>
+                            </div>
+                            <div class="setting-item">
+                                <input type="checkbox" id="autoSpeak" checked>
+                                <label for="autoSpeak">
+                                    <i class="fas fa-volume-up"></i> Auto-speak detected gesture
+                                </label>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- All Predictions -->
@@ -141,7 +193,7 @@
     <!-- Footer -->
     <footer class="footer">
         <div class="container">
-            <p>&copy; | 2026 Sign Language Translator |</p>
+            <p>&copy; 2026 Sign Language Translator</p>
         </div>
     </footer>
 

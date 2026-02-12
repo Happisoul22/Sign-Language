@@ -7,6 +7,7 @@ from tensorflow import keras
 import os
 from collections import deque
 import json
+from deep_translator import GoogleTranslator
 
 app = Flask(__name__)
 
@@ -170,26 +171,40 @@ def generate_frames():
     """Generate frames for video streaming"""
     global camera, camera_active
     
-    while camera_active:
-        if camera is None:
-            break
+    try:
+        while camera_active:
+            if camera is None:
+                break
+                
+            success, frame = camera.read()
+            if not success:
+                print("Failed to read frame from camera")
+                break
             
-        success, frame = camera.read()
-        if not success:
-            break
-        
-        frame = cv2.flip(frame, 1)
-        
-        # Process frame
-        processed_frame, gesture, confidence, all_preds, hand_detected = \
-            translator.process_frame(frame)
-        
-        # Encode frame
-        ret, buffer = cv2.imencode('.jpg', processed_frame)
-        frame = buffer.tobytes()
-        
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            frame = cv2.flip(frame, 1)
+            
+            # Process frame
+            try:
+                processed_frame, gesture, confidence, all_preds, hand_detected = \
+                    translator.process_frame(frame)
+            except Exception as e:
+                print(f"Error processing frame: {e}")
+                processed_frame = frame
+            
+            # Encode frame
+            try:
+                ret, buffer = cv2.imencode('.jpg', processed_frame)
+                frame = buffer.tobytes()
+                
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            except Exception as e:
+                print(f"Error encoding frame: {e}")
+                break
+    except Exception as e:
+        print(f"Error in generate_frames: {e}")
+    finally:
+        print("Video feed stopped")
 
 @app.route('/video_feed')
 def video_feed():
@@ -202,35 +217,100 @@ def start_camera():
     """Start the camera"""
     global camera, camera_active
     
-    if not camera_active:
-        camera = cv2.VideoCapture(0)
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        camera_active = True
-        return jsonify({'status': 'success', 'message': 'Camera started'})
-    
-    return jsonify({'status': 'error', 'message': 'Camera already active'})
+    try:
+        if not camera_active:
+            print("Attempting to start camera...")
+            camera = cv2.VideoCapture(0)
+            
+            if not camera.isOpened():
+                print("Failed to open camera at index 0, trying index 1...")
+                camera = cv2.VideoCapture(1)
+            
+            if not camera.isOpened():
+                print("Camera could not be opened!")
+                camera = None
+                return jsonify({'status': 'error', 'message': 'Camera could not be opened. Please check if camera is available.'})
+            
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            
+            # Test read
+            ret, _ = camera.read()
+            if not ret:
+                print("Camera opened but cannot read frames!")
+                camera.release()
+                camera = None
+                return jsonify({'status': 'error', 'message': 'Camera opened but cannot read frames.'})
+            
+            camera_active = True
+            print("Camera started successfully!")
+            return jsonify({'status': 'success', 'message': 'Camera started'})
+        
+        return jsonify({'status': 'error', 'message': 'Camera already active'})
+    except Exception as e:
+        print(f"Error starting camera: {e}")
+        camera = None
+        camera_active = False
+        return jsonify({'status': 'error', 'message': f'Error starting camera: {str(e)}'})
 
 @app.route('/stop_camera', methods=['POST'])
 def stop_camera():
     """Stop the camera"""
     global camera, camera_active
     
-    if camera_active:
+    try:
+        if camera_active:
+            camera_active = False
+            if camera is not None:
+                camera.release()
+                camera = None
+            print("Camera stopped successfully!")
+            return jsonify({'status': 'success', 'message': 'Camera stopped'})
+        
+        return jsonify({'status': 'error', 'message': 'Camera not active'})
+    except Exception as e:
+        print(f"Error stopping camera: {e}")
         camera_active = False
-        if camera is not None:
-            camera.release()
-            camera = None
-        return jsonify({'status': 'success', 'message': 'Camera stopped'})
-    
-    return jsonify({'status': 'error', 'message': 'Camera not active'})
+        camera = None
+        return jsonify({'status': 'error', 'message': f'Error stopping camera: {str(e)}'})
 
 @app.route('/get_prediction', methods=['GET'])
 def get_prediction():
     """Get current prediction"""
     global camera, camera_active
     
-    if not camera_active or camera is None:
+    try:
+        if not camera_active or camera is None:
+            return jsonify({
+                'gesture': None,
+                'confidence': 0,
+                'all_predictions': [],
+                'hand_detected': False,
+                'sentence': translator.sentence
+            })
+        
+        success, frame = camera.read()
+        if not success:
+            return jsonify({
+                'gesture': None,
+                'confidence': 0,
+                'all_predictions': [],
+                'hand_detected': False,
+                'sentence': translator.sentence
+            })
+        
+        frame = cv2.flip(frame, 1)
+        _, gesture, confidence, all_preds, hand_detected = translator.process_frame(frame)
+        
+        return jsonify({
+            'gesture': gesture,
+            'confidence': confidence,
+            'all_predictions': all_preds,
+            'hand_detected': hand_detected,
+            'sentence': translator.sentence
+        })
+    except Exception as e:
+        print(f"Error in get_prediction: {e}")
         return jsonify({
             'gesture': None,
             'confidence': 0,
@@ -238,27 +318,6 @@ def get_prediction():
             'hand_detected': False,
             'sentence': translator.sentence
         })
-    
-    success, frame = camera.read()
-    if not success:
-        return jsonify({
-            'gesture': None,
-            'confidence': 0,
-            'all_predictions': [],
-            'hand_detected': False,
-            'sentence': translator.sentence
-        })
-    
-    frame = cv2.flip(frame, 1)
-    _, gesture, confidence, all_preds, hand_detected = translator.process_frame(frame)
-    
-    return jsonify({
-        'gesture': gesture,
-        'confidence': confidence,
-        'all_predictions': all_preds,
-        'hand_detected': hand_detected,
-        'sentence': translator.sentence
-    })
 
 @app.route('/add_to_sentence', methods=['POST'])
 def add_to_sentence():
@@ -287,6 +346,66 @@ def get_sentence():
 def get_gestures():
     """Get all available gestures"""
     return jsonify({'gestures': translator.labels.tolist()})
+
+@app.route('/translate_text', methods=['POST'])
+def translate_text():
+    """Translate text to selected language"""
+    try:
+        data = request.json
+        text = data.get('text')
+        target_lang = data.get('target_lang', 'en')
+        
+        if not text:
+            return jsonify({'status': 'error', 'message': 'No text provided'})
+        
+        # If target is English, no translation needed
+        if target_lang == 'en':
+            return jsonify({
+                'status': 'success',
+                'original': text,
+                'translated': text,
+                'target_lang': target_lang
+            })
+        
+        # Translate using deep-translator
+        translated = GoogleTranslator(source='en', target=target_lang).translate(text)
+        
+        return jsonify({
+            'status': 'success',
+            'original': text,
+            'translated': translated,
+            'target_lang': target_lang
+        })
+    except Exception as e:
+        print(f"Translation error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/get_languages', methods=['GET'])
+def get_languages():
+    """Get available languages for translation"""
+    languages = {
+        'en': 'English',
+        'hi': 'Hindi',
+        'es': 'Spanish',
+        'fr': 'French',
+        'de': 'German',
+        'it': 'Italian',
+        'pt': 'Portuguese',
+        'ru': 'Russian',
+        'ja': 'Japanese',
+        'ko': 'Korean',
+        'zh-cn': 'Chinese (Simplified)',
+        'ar': 'Arabic',
+        'ta': 'Tamil',
+        'te': 'Telugu',
+        'kn': 'Kannada',
+        'ml': 'Malayalam',
+        'bn': 'Bengali',
+        'mr': 'Marathi',
+        'gu': 'Gujarati',
+        'ur': 'Urdu'
+    }
+    return jsonify({'languages': languages})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
