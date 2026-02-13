@@ -133,6 +133,9 @@ function continueCamera() {
         return;
     }
     
+    // CLEAR SENTENCE when continuing
+    clearSentence();
+    
     isPaused = false;
     highConfidenceDetected = false; // Reset for next detection
     console.log('▶️  Camera resumed');
@@ -150,7 +153,42 @@ function continueCamera() {
     // Hide translation if shown
     document.getElementById('translationDisplay').style.display = 'none';
     
-    showNotification('Camera resumed - Ready to detect!', 'success');
+    showNotification('Camera resumed - Sentence cleared, ready for next!', 'success');
+}
+
+// Speak current sentence (complete sentence, not just word)
+async function speakCurrentSentence() {
+    try {
+        const response = await fetch('/get_sentence');
+        const data = await response.json();
+        
+        if (!data.sentence || data.sentence.length === 0) {
+            return; // Don't speak if empty
+        }
+        
+        const text = data.sentence.join(' ');
+        const selectedLang = document.getElementById('languageSelect').value;
+        
+        // If not English, translate first then speak
+        if (selectedLang !== 'en') {
+            const translatedText = await translateText(text, selectedLang);
+            if (translatedText) {
+                speakText(translatedText, selectedLang);
+                // Show translation
+                const translationDisplay = document.getElementById('translationDisplay');
+                const translationText = document.getElementById('translationText');
+                translationText.textContent = translatedText;
+                translationDisplay.style.display = 'block';
+            } else {
+                speakText(text); // Fallback to English
+            }
+        } else {
+            speakText(text);
+        }
+        
+    } catch (error) {
+        console.error('Error speaking sentence:', error);
+    }
 }
 
 // Update camera status indicator
@@ -169,7 +207,7 @@ function updateCameraStatus(active) {
 
 // Start prediction updates
 function startPredictionUpdates() {
-    updateInterval = setInterval(updatePredictions, 100); // Update every 100ms
+    updateInterval = setInterval(updatePredictions, 200); // Update every 200ms (optimized for performance)
 }
 
 // Stop prediction updates
@@ -209,6 +247,9 @@ async function updatePredictions() {
                 console.log(`🎯 HIGH CONFIDENCE DETECTED: ${data.gesture} (${confidencePercent}%)`);
                 console.log(`⏸️  Pausing camera...`);
                 
+                // AUTO-ADD gesture to sentence
+                await addToSentence();
+                
                 // Pause (camera keeps running in background!)
                 setTimeout(() => {
                     pauseCamera();
@@ -217,14 +258,7 @@ async function updatePredictions() {
                     const autoSpeak = document.getElementById('autoSpeak').checked;
                     if (autoSpeak) {
                         console.log(`🔊 Auto-speaking: ${data.gesture}`);
-                        speakText(data.gesture);
-                    }
-                    
-                    // Translate if language is not English
-                    const selectedLang = document.getElementById('languageSelect').value;
-                    if (selectedLang !== 'en') {
-                        console.log(`🌐 Translating to ${selectedLang}...`);
-                        translateAndDisplay(data.gesture, selectedLang);
+                        speakCurrentSentence();
                     }
                     
                     showNotification(`Detected: ${data.gesture} (${confidencePercent}%) - Click Continue`, 'success');
@@ -519,6 +553,51 @@ function resetDisplays() {
     document.getElementById('translationDisplay').style.display = 'none';
     highConfidenceDetected = false;
 }
+
+// Initialize language change listener
+document.addEventListener('DOMContentLoaded', function() {
+    const languageSelect = document.getElementById('languageSelect');
+    
+    if (languageSelect) {
+        languageSelect.addEventListener('change', async function() {
+            const selectedLang = this.value;
+            console.log(`🌐 Language changed to: ${selectedLang}`);
+            
+            // Get current sentence
+            try {
+                const response = await fetch('/get_sentence');
+                const data = await response.json();
+                
+                if (data.sentence && data.sentence.length > 0) {
+                    const text = data.sentence.join(' ');
+                    
+                    // Auto-translate and speak
+                    if (selectedLang !== 'en') {
+                        const translatedText = await translateText(text, selectedLang);
+                        if (translatedText) {
+                            // Show translation
+                            const translationDisplay = document.getElementById('translationDisplay');
+                            const translationTextEl = document.getElementById('translationText');
+                            translationTextEl.textContent = translatedText;
+                            translationDisplay.style.display = 'block';
+                            
+                            // Auto-speak in new language
+                            speakText(translatedText, selectedLang);
+                            showNotification(`Translated to ${getLanguageName(selectedLang)}`, 'success');
+                        }
+                    } else {
+                        // English - just speak
+                        document.getElementById('translationDisplay').style.display = 'none';
+                        speakText(text);
+                        showNotification('Language set to English', 'info');
+                    }
+                }
+            } catch (error) {
+                console.error('Error on language change:', error);
+            }
+        });
+    }
+});
 
 // Show notification (simple toast)
 function showNotification(message, type) {

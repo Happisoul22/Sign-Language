@@ -23,9 +23,9 @@ class SignLanguageTranslator:
         self.mp_drawing = mp.solutions.drawing_utils
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=1,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.7
+            max_num_hands=2,  # Support 2 hands!
+            min_detection_confidence=0.5,  # Lower for better detection
+            min_tracking_confidence=0.5
         )
         
         # Prediction smoothing
@@ -40,8 +40,13 @@ class SignLanguageTranslator:
         # Sentence
         self.sentence = []
     
-    def extract_landmarks(self, hand_landmarks):
-        """Extract hand landmarks"""
+    def extract_landmarks(self, hand_landmarks_list):
+        """Extract hand landmarks - uses first detected hand for compatibility"""
+        if not hand_landmarks_list:
+            return None
+        
+        # Use first hand (for backward compatibility with existing models)
+        hand_landmarks = hand_landmarks_list[0]
         landmarks = []
         for landmark in hand_landmarks.landmark:
             landmarks.extend([landmark.x, landmark.y, landmark.z])
@@ -105,8 +110,8 @@ class SignLanguageTranslator:
         
         if results.multi_hand_landmarks:
             hand_detected = True
+            # Draw ALL detected hands
             for hand_landmarks in results.multi_hand_landmarks:
-                # Draw landmarks
                 self.mp_drawing.draw_landmarks(
                     frame,
                     hand_landmarks,
@@ -114,9 +119,10 @@ class SignLanguageTranslator:
                     self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=3),
                     self.mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2)
                 )
-                
-                # Predict
-                landmarks = self.extract_landmarks(hand_landmarks)
+            
+            # Predict using first hand (for compatibility)
+            landmarks = self.extract_landmarks(results.multi_hand_landmarks)
+            if landmarks is not None:
                 gesture, confidence, all_predictions = self.predict_gesture(landmarks)
                 
                 # Check for auto-add
@@ -168,8 +174,10 @@ def index():
     return render_template('index.html', gestures=translator.labels.tolist())
 
 def generate_frames():
-    """Generate frames for video streaming"""
+    """Generate frames for video streaming with frame skipping for performance"""
     global camera, camera_active
+    
+    frame_count = 0
     
     try:
         while camera_active:
@@ -183,12 +191,18 @@ def generate_frames():
             
             frame = cv2.flip(frame, 1)
             
-            # Process frame
-            try:
-                processed_frame, gesture, confidence, all_preds, hand_detected = \
-                    translator.process_frame(frame)
-            except Exception as e:
-                print(f"Error processing frame: {e}")
+            # Frame skipping: process every 2nd frame for better performance
+            frame_count += 1
+            if frame_count % 2 == 0:
+                # Process frame
+                try:
+                    processed_frame, gesture, confidence, all_preds, hand_detected = \
+                        translator.process_frame(frame)
+                except Exception as e:
+                    print(f"Error processing frame: {e}")
+                    processed_frame = frame
+            else:
+                # Skip processing, just show frame
                 processed_frame = frame
             
             # Encode frame
@@ -231,8 +245,10 @@ def start_camera():
                 camera = None
                 return jsonify({'status': 'error', 'message': 'Camera could not be opened. Please check if camera is available.'})
             
-            camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)   # Lower = faster
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            camera.set(cv2.CAP_PROP_FPS, 15)            # Lower FPS = smoother
+            camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)      # Reduce buffer lag
             
             # Test read
             ret, _ = camera.read()

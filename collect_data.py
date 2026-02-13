@@ -2,202 +2,219 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import os
-import time
 from datetime import datetime
 
-class SignLanguageDataCollector:
+class DataCollector:
     def __init__(self, data_dir="sign_language_data"):
-        """Initialize the data collector"""
+        """Initialize data collector"""
         self.data_dir = data_dir
         self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=2,
-            min_detection_confidence=0.5,
+            max_num_hands=2,  # Support 2 hands!
+            min_detection_confidence=0.5,  # Lower threshold for better detection
             min_tracking_confidence=0.5
         )
         
-        # Create data directory if it doesn't exist
+        # Create data directory
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir)
         
-        # Define your gestures here
-        self.gestures = []
-        self.current_gesture_index = 0
-        self.samples_per_gesture = 500  # Number of samples to collect per gesture
-        self.current_samples = 0
-        
-        # Storage for collected data
+        # Storage
         self.all_data = []
         self.all_labels = []
+    
+    def list_existing_datasets(self):
+        """List existing datasets"""
+        data_files = [f for f in os.listdir(self.data_dir) 
+                     if f.startswith('hand_landmarks_') and f.endswith('.npy')]
         
-    def setup_gestures(self):
-        """Let user input the gestures they want to collect"""
-        print("\n=== Sign Language Data Collection Setup ===")
-        print("Enter the names of gestures you want to collect (one per line)")
-        print("Press Enter on an empty line when done\n")
+        if not data_files:
+            return []
         
-        while True:
-            gesture = input(f"Gesture #{len(self.gestures) + 1}: ").strip()
-            if gesture == "":
-                break
-            if gesture:
-                self.gestures.append(gesture)
+        data_files.sort(reverse=True)
+        return data_files
+    
+    def load_existing_dataset(self, data_file):
+        """Load existing dataset"""
+        data_path = os.path.join(self.data_dir, data_file)
+        labels_file = data_file.replace('hand_landmarks_', 'labels_')
+        labels_path = os.path.join(self.data_dir, labels_file)
         
-        if not self.gestures:
-            print("No gestures entered! Adding default gestures...")
-            self.gestures = ["Hello", "ThankYou", "Yes", "No", "Help"]
+        if not os.path.exists(labels_path):
+            print(f"❌ Labels file not found: {labels_file}")
+            return None, None
         
-        print(f"\nGestures to collect: {', '.join(self.gestures)}")
+        data = np.load(data_path)
+        labels = np.load(labels_path)
         
-        num_samples = input(f"\nSamples per gesture (default 200): ").strip()
-        if num_samples.isdigit():
-            self.samples_per_gesture = int(num_samples)
+        print(f"\n✓ Loaded existing dataset: {data_file}")
+        print(f"   Total samples: {len(data)}")
         
-        print(f"\nWill collect {self.samples_per_gesture} samples for each gesture")
+        unique, counts = np.unique(labels, return_counts=True)
+        print(f"   Existing gestures: {len(unique)}")
+        for gesture, count in zip(unique, counts):
+            print(f"      - {gesture}: {count} samples")
         
-    def extract_landmarks(self, hand_landmarks):
-        """Extract hand landmarks as a flattened array"""
+        return data.tolist(), labels.tolist()
+    
+    def extract_landmarks(self, hand_landmarks_list):
+        """Extract hand landmarks - uses first detected hand"""
+        if not hand_landmarks_list:
+            return None
+        
+        # Use first hand for consistency
+        hand_landmarks = hand_landmarks_list[0]
         landmarks = []
         for landmark in hand_landmarks.landmark:
             landmarks.extend([landmark.x, landmark.y, landmark.z])
-        return np.array(landmarks)
+        return landmarks
     
-    def collect_data(self):
-        """Main data collection loop"""
-        cap = cv2.VideoCapture(0)
+    def collect_data(self, gestures, samples_per_gesture, extend_mode=False, existing_data=None, existing_labels=None):
+        """Collect data from webcam"""
+        if extend_mode and existing_data is not None:
+            self.all_data = existing_data
+            self.all_labels = existing_labels
+            print(f"\n📦 Extending existing dataset!")
+            print(f"   Starting with {len(existing_data)} existing samples")
         
-        # Set camera resolution
+        cap = cv2.VideoCapture(0)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         
+        current_gesture_idx = 0
         collecting = False
-        cooldown = 0
+        samples_collected = 0
         
-        print("\n=== Data Collection Started ===")
+        print(f"\n{'='*70}")
+        print("   DATA COLLECTION STARTED")
+        print(f"{'='*70}\n")
         print("Controls:")
-        print("  SPACE - Start/Stop collecting samples")
-        print("  N - Skip to next gesture")
-        print("  S - Save all data and exit")
+        print("  SPACE - Start/Stop collecting")
+        print("  N - Next gesture")
+        print("  S - Save and exit")
         print("  Q - Quit without saving")
-        print("\n")
+        print(f"{'='*70}\n")
         
-        while cap.isOpened():
+        while True:
             ret, frame = cap.read()
             if not ret:
-                print("Failed to grab frame")
                 break
             
-            # Flip frame for mirror effect
             frame = cv2.flip(frame, 1)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Process the frame
             results = self.hands.process(rgb_frame)
             
-            # Draw hand landmarks
+            # Check if all gestures are completed
+            if current_gesture_idx >= len(gestures):
+                # All gestures done - show completion message
+                cv2.putText(frame, "ALL GESTURES COLLECTED!", (10, 250),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+                cv2.putText(frame, "Press 'S' to SAVE or 'Q' to QUIT", (10, 300),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                cv2.imshow('Data Collection', frame)
+                
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('s'):
+                    print("\nSaving data...")
+                    break
+                elif key == ord('q'):
+                    print("\nQuitting without saving...")
+                    cap.release()
+                    cv2.destroyAllWindows()
+                    return False
+                continue
+            
+            # Current gesture info
+            gesture_name = gestures[current_gesture_idx]
+            
+            # Draw info with backgrounds for better visibility
+            status = "COLLECTING" if collecting else "PAUSED"
+            color = (0, 255, 0) if collecting else (0, 0, 255)
+            
+            # Count detected hands
+            hands_detected = len(results.multi_hand_landmarks) if results.multi_hand_landmarks else 0
+            hands_color = (0, 255, 0) if hands_detected > 0 else (0, 0, 255)
+            
+            # Helper function to draw text with background
+            def draw_text_with_bg(img, text, pos, font_scale=1, thickness=2, text_color=(255, 255, 255), bg_color=(0, 0, 0)):
+                (text_width, text_height), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                x, y = pos
+                # Draw background rectangle
+                cv2.rectangle(img, (x - 5, y - text_height - 5), (x + text_width + 5, y + baseline + 5), bg_color, -1)
+                # Draw text
+                cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness)
+            
+            # Draw all info with backgrounds
+            draw_text_with_bg(frame, f"Gesture: {gesture_name}", (10, 30), 0.8, 2)
+            draw_text_with_bg(frame, f"Progress: {samples_collected}/{samples_per_gesture}", (10, 70), 0.8, 2)
+            draw_text_with_bg(frame, f"Gesture {current_gesture_idx + 1}/{len(gestures)}", (10, 110), 0.8, 2)
+            draw_text_with_bg(frame, status, (10, 150), 0.8, 2, color)
+            draw_text_with_bg(frame, f"Hands: {hands_detected}", (10, 190), 0.8, 2, hands_color)
+            
+            # Draw hand landmarks (ALWAYS, even when paused!)
             if results.multi_hand_landmarks:
                 for hand_landmarks in results.multi_hand_landmarks:
                     self.mp_drawing.draw_landmarks(
-                        frame, 
-                        hand_landmarks, 
-                        self.mp_hands.HAND_CONNECTIONS
+                        frame,
+                        hand_landmarks,
+                        self.mp_hands.HAND_CONNECTIONS,
+                        self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=3),
+                        self.mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2)
                     )
+            
+            # Collect data only when actively collecting
+            if results.multi_hand_landmarks and collecting:
+                # Extract from first hand only (for consistency)
+                landmarks = self.extract_landmarks(results.multi_hand_landmarks)
+                if landmarks:
+                    self.all_data.append(landmarks)
+                    self.all_labels.append(gesture_name)
+                    samples_collected += 1
                     
-                    # Collect data if in collection mode
-                    if collecting and cooldown == 0:
-                        landmarks = self.extract_landmarks(hand_landmarks)
-                        self.all_data.append(landmarks)
-                        self.all_labels.append(self.gestures[self.current_gesture_index])
-                        self.current_samples += 1
-                        cooldown = 2  # Small cooldown to avoid duplicate captures
+                    if samples_collected >= samples_per_gesture:
+                        print(f"✓ Completed collecting {samples_per_gesture} samples for '{gesture_name}'")
+                        samples_collected = 0
+                        collecting = False
+                        current_gesture_idx += 1
+                        print("\n✓ All gestures collected!" if current_gesture_idx >= len(gestures) else "")
             
-            # Handle cooldown
-            if cooldown > 0:
-                cooldown -= 1
+            cv2.imshow('Data Collection', frame)
             
-            # Check if we've collected enough samples for current gesture
-            if self.current_samples >= self.samples_per_gesture:
-                print(f"✓ Completed collecting {self.samples_per_gesture} samples for '{self.gestures[self.current_gesture_index]}'")
-                self.current_gesture_index += 1
-                self.current_samples = 0
-                collecting = False
-                
-                if self.current_gesture_index >= len(self.gestures):
-                    print("\n🎉 All gestures collected!")
-                    print("Press 'S' to save or 'Q' to quit without saving")
-            
-            # Display UI
-            self.draw_ui(frame, collecting)
-            
-            # Show the frame
-            cv2.imshow('Sign Language Data Collection', frame)
-            
-            # Handle key presses
             key = cv2.waitKey(1) & 0xFF
             
-            if key == ord('q'):
-                print("\nQuitting without saving...")
-                break
-            elif key == ord(' '):
-                if self.current_gesture_index < len(self.gestures):
+            if key == ord(' '):  # Space - Start/Stop
+                if current_gesture_idx < len(gestures):
                     collecting = not collecting
-                    status = "STARTED" if collecting else "PAUSED"
-                    print(f"{status} collecting for '{self.gestures[self.current_gesture_index]}'")
-            elif key == ord('n'):
-                if self.current_gesture_index < len(self.gestures) - 1:
-                    print(f"Skipping '{self.gestures[self.current_gesture_index]}' (collected {self.current_samples} samples)")
-                    self.current_gesture_index += 1
-                    self.current_samples = 0
+                    status_msg = "started" if collecting else "paused"
+                    print(f"Collection {status_msg} for '{gesture_name}'")
+            
+            elif key == ord('n'):  # Next gesture
+                if current_gesture_idx < len(gestures) - 1:
+                    current_gesture_idx += 1
+                    samples_collected = 0
                     collecting = False
-            elif key == ord('s'):
-                self.save_data()
+                    print(f"Skipped to gesture: {gestures[current_gesture_idx]}")
+            
+            elif key == ord('s'):  # Save
+                print("\nSaving data...")
                 break
+            
+            elif key == ord('q'):  # Quit
+                print("\nQuitting without saving...")
+                cap.release()
+                cv2.destroyAllWindows()
+                return False
         
         cap.release()
         cv2.destroyAllWindows()
-        self.hands.close()
+        return True
     
-    def draw_ui(self, frame, collecting):
-        """Draw UI elements on the frame"""
-        h, w, _ = frame.shape
-        
-        # Background panel
-        cv2.rectangle(frame, (10, 10), (w - 10, 150), (0, 0, 0), -1)
-        cv2.rectangle(frame, (10, 10), (w - 10, 150), (255, 255, 255), 2)
-        
-        # Current gesture info
-        if self.current_gesture_index < len(self.gestures):
-            gesture = self.gestures[self.current_gesture_index]
-            progress = f"{self.current_samples}/{self.samples_per_gesture}"
-            
-            cv2.putText(frame, f"Gesture: {gesture}", (20, 40), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.putText(frame, f"Progress: {progress}", (20, 75), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(frame, f"Gesture {self.current_gesture_index + 1}/{len(self.gestures)}", 
-                       (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            # Collection status
-            status_text = "COLLECTING" if collecting else "PAUSED"
-            status_color = (0, 255, 0) if collecting else (0, 165, 255)
-            cv2.putText(frame, status_text, (20, 135), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
-            
-            # Progress bar
-            bar_width = w - 40
-            progress_width = int((self.current_samples / self.samples_per_gesture) * bar_width)
-            cv2.rectangle(frame, (20, h - 40), (20 + bar_width, h - 20), (50, 50, 50), -1)
-            cv2.rectangle(frame, (20, h - 40), (20 + progress_width, h - 20), (0, 255, 0), -1)
-        else:
-            cv2.putText(frame, "All gestures collected! Press 'S' to save", 
-                       (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    
-    def save_data(self):
-        """Save collected data to files"""
+    def save_data(self, filename_suffix=""):
+        """Save collected data"""
         if len(self.all_data) == 0:
-            print("No data to save!")
+            print("❌ No data to save!")
             return
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -206,44 +223,137 @@ class SignLanguageDataCollector:
         data_array = np.array(self.all_data)
         labels_array = np.array(self.all_labels)
         
-        # Save as numpy files
-        data_file = os.path.join(self.data_dir, f"hand_landmarks_{timestamp}.npy")
-        labels_file = os.path.join(self.data_dir, f"labels_{timestamp}.npy")
+        # Save files
+        suffix = f"_{filename_suffix}" if filename_suffix else ""
+        data_file = os.path.join(self.data_dir, f"hand_landmarks_{timestamp}{suffix}.npy")
+        labels_file = os.path.join(self.data_dir, f"labels_{timestamp}{suffix}.npy")
+        csv_file = os.path.join(self.data_dir, f"dataset_{timestamp}{suffix}.csv")
         
         np.save(data_file, data_array)
         np.save(labels_file, labels_array)
         
-        # Also save as CSV for easy inspection
-        csv_file = os.path.join(self.data_dir, f"dataset_{timestamp}.csv")
+        # Save CSV
         with open(csv_file, 'w') as f:
-            # Write header
             header = [f"landmark_{i}" for i in range(data_array.shape[1])]
             f.write(','.join(header) + ',label\n')
             
-            # Write data
             for i in range(len(data_array)):
                 row = ','.join(map(str, data_array[i])) + f',{labels_array[i]}\n'
                 f.write(row)
         
-        print(f"\n✓ Data saved successfully!")
-        print(f"  - NumPy data: {data_file}")
-        print(f"  - NumPy labels: {labels_file}")
-        print(f"  - CSV file: {csv_file}")
-        print(f"  - Total samples: {len(self.all_data)}")
-        print(f"  - Unique gestures: {len(set(self.all_labels))}")
+        print(f"\n{'='*70}")
+        print("   DATA SAVED SUCCESSFULLY")
+        print(f"{'='*70}")
+        print(f"✓ Data: {data_file}")
+        print(f"✓ Labels: {labels_file}")
+        print(f"✓ CSV: {csv_file}")
+        print(f"\n📊 Dataset statistics:")
+        print(f"   Total samples: {len(self.all_data)}")
         
-        # Print statistics
-        print("\nDataset statistics:")
         unique, counts = np.unique(labels_array, return_counts=True)
         for gesture, count in zip(unique, counts):
-            print(f"  {gesture}: {count} samples")
+            print(f"   {gesture}: {count} samples")
+        
+        print(f"{'='*70}\n")
+
+
+def main():
+    """Main function"""
+    collector = DataCollector()
+    
+    print("\n" + "="*70)
+    print("   SIGN LANGUAGE DATA COLLECTION")
+    print("="*70)
+    
+    # Check for existing datasets
+    existing_datasets = collector.list_existing_datasets()
+    
+    extend_mode = False
+    existing_data = None
+    existing_labels = None
+    
+    if existing_datasets:
+        print("\n📦 Found existing datasets:")
+        for i, dataset in enumerate(existing_datasets):
+            print(f"  [{i+1}] {dataset}")
+        
+        print("\n" + "="*70)
+        print("Do you want to:")
+        print("  [1] Create NEW dataset (start fresh)")
+        print("  [2] EXTEND existing dataset (add more gestures)")
+        print("="*70)
+        
+        choice = input("Your choice (1/2): ").strip()
+        
+        if choice == '2':
+            # Select dataset to extend
+            dataset_idx = input(f"Select dataset to extend (1-{len(existing_datasets)}): ").strip()
+            try:
+                idx = int(dataset_idx) - 1
+                if 0 <= idx < len(existing_datasets):
+                    existing_data, existing_labels = collector.load_existing_dataset(existing_datasets[idx])
+                    if existing_data is not None:
+                        extend_mode = True
+                        print("\n✓ Will extend this dataset with NEW gestures!")
+                    else:
+                        print("❌ Failed to load dataset. Creating new instead.")
+                else:
+                    print("❌ Invalid selection. Creating new dataset.")
+            except:
+                print("❌ Invalid input. Creating new dataset.")
+    
+    # Get gestures to collect
+    print("\n" + "="*70)
+    print("Enter gesture names (one per line)")
+    print("Press Enter on empty line when done")
+    print("="*70)
+    
+    if extend_mode:
+        print("⚠️  Enter ONLY the NEW gestures you want to ADD")
+        print("    (Old gestures are already in the dataset)")
+    
+    gestures = []
+    gesture_num = 1
+    
+    while True:
+        gesture = input(f"Gesture #{gesture_num}: ").strip()
+        if not gesture:
+            break
+        gestures.append(gesture)
+        gesture_num += 1
+    
+    if not gestures:
+        print("❌ No gestures entered!")
+        return
+    
+    print(f"\n{'='*70}")
+    if extend_mode:
+        print(f"Will ADD these NEW gestures to existing dataset:")
+    else:
+        print(f"Gestures to collect:")
+    for g in gestures:
+        print(f"  - {g}")
+    print(f"{'='*70}")
+    
+    # Samples per gesture
+    samples_input = input("\nSamples per gesture (default 200): ").strip()
+    samples_per_gesture = int(samples_input) if samples_input else 200
+    
+    print(f"\nWill collect {samples_per_gesture} samples for each gesture")
+    
+    input("\nPress Enter to start data collection...")
+    
+    # Collect data
+    if collector.collect_data(gestures, samples_per_gesture, extend_mode, existing_data, existing_labels):
+        # Save data
+        suffix = "extended" if extend_mode else ""
+        collector.save_data(suffix)
+        print("✅ Data collection complete!")
+        print("\n🎯 Next step: Train your model")
+        print("   Run: python train_model.py")
+    else:
+        print("❌ Collection cancelled")
 
 
 if __name__ == "__main__":
-    collector = SignLanguageDataCollector()
-    collector.setup_gestures()
-    
-    input("\nPress Enter to start data collection...")
-    collector.collect_data()
-    
-    print("\nData collection complete!")
+    main()

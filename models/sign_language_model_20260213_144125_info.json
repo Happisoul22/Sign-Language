@@ -1,0 +1,22 @@
+{
+    "model_name": "sign_language_model_20260213_144125",
+    "timestamp": "20260213_144125",
+    "num_classes": 14,
+    "gestures": [
+        "Help",
+        "Hi",
+        "I Love You",
+        "I Need Food",
+        "Mini Heart",
+        "Oh I See",
+        "Ok",
+        "Peace",
+        "Please",
+        "Sorry",
+        "Thank You",
+        "What is Your Name ?",
+        "Where ?",
+        "what ?"
+    ],
+    "input_shape": 63
+}
